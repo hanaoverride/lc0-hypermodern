@@ -210,4 +210,8 @@ Scale: clip B in [-1.0, +1.0]; α_i to be tuned.
 |      |       |      |        |      |
 
 ---
+## 16. 테스트 전략 참조 (Testing Strategy Reference)
+자세한 테스트/검증 전략은 `Test.md` 문서를 참조. 각 Phase 완료 시 `Test.md`의 Exit Criteria 체크 후 이 로그(섹션 15)에 결과 반영.
+
+---
 (End of Plan)
