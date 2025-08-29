@@ -9,11 +9,7 @@ using namespace lczero;
 
 namespace {
 
-Position PositionFromFen(const std::string& fen) {
-  Position pos;
-  pos.SetFromFen(fen);
-  return pos;
-}
+Position PositionFromFen(const std::string& fen) { return Position::FromFen(fen); }
 
 TEST(StyleMetricsTest, InitialPosition) {
   auto pos = PositionFromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
@@ -21,13 +17,14 @@ TEST(StyleMetricsTest, InitialPosition) {
   EXPECT_EQ(m.central_pawn_occupation, 0);
   EXPECT_EQ(m.locked_pawn_pairs, 0);
   EXPECT_EQ(m.fianchetto_developed, 0);
+  EXPECT_TRUE(m.pawn_break_censored); // placeholder
 }
 
 TEST(StyleMetricsTest, SimpleCentralOccupation) {
-  // After 1.d4 e5 2.e4 (illegal sequence? We'll craft FEN directly with pawns on d4,e5,e4)
+  // Pawns on d4,e4,e5
   auto pos = PositionFromFen("rnbqkbnr/pppp1ppp/8/4p3/3PP3/8/PPP2PPP/RNBQKBNR w KQkq - 0 3");
   auto m = ComputeStyleRawMetrics(pos);
-  EXPECT_EQ(m.central_pawn_occupation, 2) << "White pawns on d4,e4 count";
+  EXPECT_EQ(m.central_pawn_occupation, 2); // white d4,e4
 }
 
 TEST(StyleMetricsTest, LockedPawns) {

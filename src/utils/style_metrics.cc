@@ -1,129 +1,80 @@
-// Implementation of style metrics (Phase 0 skeleton).
+// Implementation of interim Phase 0 metrics (minimal compile-safe version).
 
 #include "utils/style_metrics.h"
 
 #include <array>
+#include <string>
 #include <vector>
-
-#include "chess/position.h"
 
 namespace lczero {
 
 namespace {
 
-// Central squares.
-constexpr Square kCentralSquares[4] = {SQ_D4, SQ_E4, SQ_D5, SQ_E5};
+// Utility: Convert board (side-to-move oriented) to a canonical absolute FEN layer string (piece placement only).
+// Simpler: use PositionToFen and take substring until first space.
+std::string BoardPlacementFen(const Position& pos) {
+  std::string full = PositionToFen(pos);
+  auto sp = full.find(' ');
+  return full.substr(0, sp);
+}
 
-int PieceAttackWeight(PieceType pt) {
-  switch (pt) {
-    case PT_PAWN: return 1;
-    case PT_KNIGHT:
-    case PT_BISHOP: return 2;
-    case PT_ROOK: return 2;
-    case PT_QUEEN: return 3;
-    case PT_KING: return 0; // ignore king for distant control
-    default: return 0;
+// Returns piece char at file f (0..7), rank r (0..7) from FEN placement (r8 displayed first).
+// We map ranks: FEN rank '8' is r=7 down to '1' r=0.
+char CharAt(const std::string& placement, int file, int rank) {
+  int current_rank = 7;
+  size_t i = 0;
+  int f = 0;
+  while (i < placement.size()) {
+    char c = placement[i++];
+    if (c == '/') { current_rank--; f = 0; continue; }
+    if (isdigit(static_cast<unsigned char>(c))) {
+      f += c - '0';
+      continue;
+    }
+    if (current_rank == rank) {
+      if (f == file) return c;
+    }
+    f++;
   }
+  return ' '; // empty fallback
 }
 
-bool IsFianchettoSquare(Square sq) {
-  return sq == SQ_G2 || sq == SQ_B2 || sq == SQ_G7 || sq == SQ_B7;
-}
+inline bool IsWhitePawn(char c) { return c == 'P'; }
+inline bool IsBlackPawn(char c) { return c == 'p'; }
 
-bool HasHomePawnForFianchetto(const Position& pos, Square bishop_sq) {
-  // For g2 bishop need pawn at g2? Actually typical structure is pawn at g2 and bishop on g2 after pawn moved from g2 to g3? Simpler early heuristic:
-  // We'll require bishop on g2 with pawn still on g3 OR g2? Too complex; Phase 0 skeleton: just count bishop on g2/b2/g7/b7.
-  (void)pos; (void)bishop_sq;
-  return true; // placeholder refinement Phase 1.
-}
-
-}  // namespace
+} // namespace
 
 int ComputeCentralPawnOccupation(const Position& pos) {
+  // White pawns on d4/e4 (files 3,4 rank 3), Black pawns on d5/e5 (rank 4)
+  auto placement = BoardPlacementFen(pos);
   int count = 0;
-  for (Square sq : {SQ_E4, SQ_D4}) {
-    if (pos.GetPieceOnSquare(sq) == MakePiece(WHITE, PT_PAWN)) count++;
-  }
-  for (Square sq : {SQ_E5, SQ_D5}) {
-    if (pos.GetPieceOnSquare(sq) == MakePiece(BLACK, PT_PAWN)) count++;
-  }
+  // d4 (file=3, rank=3), e4 (4,3)
+  if (IsWhitePawn(CharAt(placement, 3, 3))) ++count;
+  if (IsWhitePawn(CharAt(placement, 4, 3))) ++count;
+  // d5/e5 black (file 3,4 rank 4)
+  if (IsBlackPawn(CharAt(placement, 3, 4))) ++count;
+  if (IsBlackPawn(CharAt(placement, 4, 4))) ++count;
   return count;
 }
 
 int CountLockedPawnPairs(const Position& pos) {
+  // Locked: white pawn on (file f, rank r) and black pawn on (f, r+1)
+  auto placement = BoardPlacementFen(pos);
   int locked = 0;
-  // Iterate all files, ranks where a white pawn has a black pawn directly in front.
-  for (int sq = SQ_A2; sq <= SQ_H7; ++sq) { // iterate plausible white pawn origins.
-    Piece p = pos.GetPieceOnSquare(static_cast<Square>(sq));
-    if (p == MakePiece(WHITE, PT_PAWN)) {
-      Square forward = static_cast<Square>(sq + 8); // one rank up (towards black)
-      if (forward <= SQ_H8 && pos.GetPieceOnSquare(forward) == MakePiece(BLACK, PT_PAWN)) {
-        locked++;
-      }
+  for (int file = 0; file < 8; ++file) {
+    for (int rank = 1; rank < 7; ++rank) { // ranks 1..6 can have a white pawn with a black in front
+      char w = CharAt(placement, file, rank);
+      char b = CharAt(placement, file, rank + 1);
+      if (IsWhitePawn(w) && IsBlackPawn(b)) locked++;
     }
   }
   return locked;
 }
 
-int ComputeDistantCentralControl(const Position& pos) {
-  int total = 0;
-  for (Color c : {WHITE, BLACK}) {
-    for (Square sq = SQ_A1; sq <= SQ_H8; sq = static_cast<Square>(sq + 1)) {
-      Piece piece = pos.GetPieceOnSquare(sq);
-      if (piece == PIECE_EMPTY) continue;
-      if (GetColor(piece) != c) continue;
-      PieceType pt = GetPieceType(piece);
-      int w = PieceAttackWeight(pt);
-      if (w == 0) continue;
-      // For simplicity Phase 0: naive check using position's PseudoLegalMoves? Instead we approximate: if piece could move like its pattern.
-      // Placeholder: count presence if piece is itself on a central square OR (pawn) controlling central square by rule.
-      // TODO Phase 1: replace with true attack map (bitboards) for accuracy.
-      for (Square cs : kCentralSquares) {
-        if (pt == PT_PAWN) {
-          int dir = (c == WHITE) ? 8 : -8; // forward increment.
-          // Pawn attacks differ by diagonal; approximate: white pawn on file +/-1 rank -1 from cs
-          if (c == WHITE) {
-            if (sq == cs - 7 || sq == cs - 9) total += w; // from which it attacks cs
-          } else {
-            if (sq == cs + 7 || sq == cs + 9) total += w;
-          }
-        } else {
-          // Very rough heuristic: if taxicab distance <=2 treat as controlling central square.
-          int file_sq = sq % 8; int rank_sq = sq / 8;
-          int file_cs = cs % 8; int rank_cs = cs / 8;
-          int manhattan = (file_sq > file_cs ? file_sq - file_cs : file_cs - file_sq) +
-                          (rank_sq > rank_cs ? rank_sq - rank_cs : rank_cs - rank_sq);
-          if (manhattan <= 2) total += w; // placeholder
-        }
-      }
-    }
-  }
-  return total;
-}
-
-int ComputeFianchettoDeveloped(const Position& pos) {
-  int count = 0;
-  for (Square sq = SQ_A1; sq <= SQ_H8; sq = static_cast<Square>(sq + 1)) {
-    if (!IsFianchettoSquare(sq)) continue;
-    Piece p = pos.GetPieceOnSquare(sq);
-    if (p == PIECE_EMPTY) continue;
-    if (GetPieceType(p) == PT_BISHOP && HasHomePawnForFianchetto(pos, sq)) count++;
-  }
-  return count;
-}
-
-bool HasEarlyCentralPawnContact(const Position& pos) {
-  // Detect white pawn on d/e file directly facing black pawn.
-  for (Square w_sq = SQ_D2; w_sq <= SQ_E7; w_sq = static_cast<Square>(w_sq + 1)) {
-    Piece pw = pos.GetPieceOnSquare(w_sq);
-    if (pw != MakePiece(WHITE, PT_PAWN)) continue;
-    Square forward = static_cast<Square>(w_sq + 8);
-    if (forward <= SQ_H8 && (w_sq % 8 == 3 || w_sq % 8 == 4)) { // file d=3, e=4
-      if (pos.GetPieceOnSquare(forward) == MakePiece(BLACK, PT_PAWN)) return true;
-    }
-  }
-  return false;
-}
+int ComputeDistantCentralControl(const Position& /*pos*/) { return 0; }
+int ComputeFianchettoDeveloped(const Position& /*pos*/) { return 0; }
+int ComputeSpaceImbalance(const Position& /*pos*/) { return 0; }
+int ComputePawnBreakDelayStub() { return 0; }
 
 StyleRawMetrics ComputeStyleRawMetrics(const Position& pos) {
   StyleRawMetrics m;
@@ -131,8 +82,10 @@ StyleRawMetrics ComputeStyleRawMetrics(const Position& pos) {
   m.locked_pawn_pairs = CountLockedPawnPairs(pos);
   m.distant_central_control = ComputeDistantCentralControl(pos);
   m.fianchetto_developed = ComputeFianchettoDeveloped(pos);
-  m.early_pawn_contact_created = HasEarlyCentralPawnContact(pos) ? 1 : 0;
+  m.pawn_break_delay = ComputePawnBreakDelayStub();
+  m.pawn_break_censored = true; // placeholder until PB delay logic implemented
+  m.space_imbalance = ComputeSpaceImbalance(pos);
   return m;
 }
 
-}  // namespace lczero
+} // namespace lczero
