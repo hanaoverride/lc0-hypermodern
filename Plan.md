@@ -214,4 +214,53 @@ Scale: clip B in [-1.0, +1.0]; α_i to be tuned.
 자세한 테스트/검증 전략은 `Test.md` 문서를 참조. 각 Phase 완료 시 `Test.md`의 Exit Criteria 체크 후 이 로그(섹션 15)에 결과 반영.
 
 ---
+## 17. 스타일 메트릭 공식 사양 (Style Metrics Specification)
+Hypermodern/Closed 성향 측정 메트릭의 공식 정의 및 정규화 파이프라인. Phase 0은 경량 근사, Phase 1+ 정밀화.
+
+### 17.1 Ply & 윈도우
+ply_0 = 초기 FEN, ply_k = k번째 half-move 적용 후. 윈도우 평균은 실제 관측 n으로 나눔.
+
+### 17.2 메트릭 개요
+| Metric | 의미 | Window / 이벤트 | 방향 | Phase 0 | Phase 1+ |
+|--------|------|-----------------|------|---------|----------|
+| CO | e4/d4(백)+e5/d5(흑) 점유 | ply 1–12 평균 | 낮을수록 | 비트보드 카운트 | 동일 |
+| DCC | 장거리 중앙 공격 | ply 8–16 평균 | 높을수록 | 맨해튼 근사 | 정확 attack map |
+| FCH | 피안케토 구조 수 | ≤14 달성 | 높을수록 | Binary (bishop+pawn 1-step) | full/partial 구분 |
+| PB_delay | 중앙 pawn tension 지연 | 최초 이벤트 (censor) | 늦을수록 | 파일/대각 검사 | en passant/공격맵 |
+| CL | frontal locked pairs | ply 10–30 평균 | 높을수록 | rank3–6 frontal | central weight 옵션 |
+| SI | 공간 우위 차 | ply 10–30 평균 | 높을수록 | 유니크 + pawn 0.3 | decorrelation (DCC) |
+
+### 17.3 공식
+CO = (1/n) Σ_{t∈[1,12]} (#Wpawns(e4,d4)+#Bpawns(e5,d5))_t.
+DCC_t = Σ_p w(p)*|A_p|, A_p = p가 공격하는 {d4,e4,d5,e5}, w={N:1.0,B:1.1,R:1.2,Q:1.4}. DCC = 평균_{8..16}.
+FCH_Phase0: bishop ∈ {g2,b2,g7,b7} ∧ file pawn 한 칸 전진(g3,b3,g6,b6). Chess960 -> 0 (flag 기록).
+PB_delay: tension (frontal/diagonal/en passant) 최초 ply; 없음 → ply_end+1,censored.
+CL_t: rank3–6 frontal 대치 수. CL=평균_{10..30} (샘플<6 skip flag).
+SI_t: (White control(rank≥5) – Black control(rank≤4)) with pawn weight 0.3. SI=평균_{10..30}.
+
+### 17.4 정규화 파이프라인
+1) Pre-transform: PB_delay→ln(v+1); SI clip to [p05,p95]; others identity.
+2) Robust scale: (x-median)/(IQR+ε), IQR<1e-6→std*0.7413 또는 range/6 fallback; clip [-3,3].
+3) Map: u=(scaled+3)/6.
+4) 방향: CO=1-u_CO; 나머지 유지. scaled_SI>2.5→2.5.
+5) Style Score: S=Σ w_i * metric_i_norm.
+
+### 17.5 가중치 (weights v1)
+{ CO:0.20, DCC:0.25, FCH:0.10, PB_delay:0.20, CL:0.15, SI:0.10 }.
+
+### 17.6 Censoring & JSON
+PB_delay: {"value": ply_end+1, "censored": true, "reason":"no_break"}. 각 metric: {value, window:[a,b], n} 저장.
+
+### 17.7 Drift
+최근 1000 games rolling S_mean z-score>2.5 경고, >3.0 재baseline 고려.
+
+### 17.8 Phase 차등화
+Phase 1+: 공격맵 정밀화, FCH level, SI decorrelation, PB_delay survival 분석, adaptive weight (Bayesian optimization) 옵션.
+
+### 17.9 실패 처리
+IQR=0 → scale=1 fallback. 결측 metric → 0.5 + warning. censored PB_delay 학습 시 weight↓.
+
+### 17.10 버전 관리
+normalization_version (baseline 재산출 시 증가), weights_version (가중치 변경 시). JSON에 동기화.
+
 (End of Plan)

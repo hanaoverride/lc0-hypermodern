@@ -175,6 +175,7 @@ common_files += [
   'src/utils/optionsparser.cc',
   'src/utils/random.cc',
   'src/utils/string.cc',
+  'src/utils/style_metrics.cc',
   'src/version.cc',
 ]
 
@@ -905,6 +906,11 @@ if get_option('gtest')
     include_directories: includes, link_with: lc0_lib,
     dependencies: [gtest]
   ), args: '--gtest_output=xml:encoder.xml', timeout: 90)
+
+  test('StyleMetricsTest',
+    executable('style_metrics_test', 'src/utils/style_metrics_test.cc',
+    include_directories: includes, link_with: lc0_lib, dependencies: gtest
+  ), args: '--gtest_output=xml:style_metrics.xml', timeout: 90)
 
   test('EngineTest',
     executable('engine_test', 'src/engine_test.cc', 'src/engine.cc',

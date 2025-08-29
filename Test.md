@@ -103,13 +103,98 @@ Exit Criteria:
 
 ---
 ## 7. 단위 테스트 세부 (Unit Test Details)
-우선 순위 함수:
-- `ComputeCentralOccupation(position)`
-- `ComputeLockedPawns(position)`
-- `ComputeDistantCentralControl(position)`
-- `ComputeFianchettoStatus(position)`
-- Heuristic `ComputeMoveStyleDelta(position, move)`
-테스트 패턴: 최소 1 포지션 = 1 assert set, 캡처된 기대값 JSON 보관.
+우선 순위 함수 (Plan.md §17 표기 이름과 매핑):
+- CO: `ComputeCentralOccupation(position)`
+- DCC: `ComputeDistantCentralControl(position)`
+- FCH: `ComputeFianchettoStatus(position)` (양측 bishop 상태 / partial 진행도)
+- PB_delay: `ComputePawnBreakDelay(position)` (censoring 플래그 포함)
+- CL: `ComputeClosedness(position)` (locked pawn chains, blocked center)
+- SI: `ComputeSpaceImbalance(position)` (rank-based space differential)
+- Move Delta: `ComputeMoveStyleDelta(position, move)` → 검색 prior bias용 (Phase 1)
+
+### 7.1 메트릭별 테스트 매트릭스 (Per-Metric Test Matrix)
+표준 포맷: (Name, FEN, Expected Raw, Notes) — Raw은 정규화 전 값. 필요 시 tolerance (±) 명시.
+
+1. CO (Central Occupation)
+	- Empty center: `8/8/8/8/8/8/8/8 w - - 0 1` → 0
+	- White pawns e4,d4: `8/8/8/3P4/4P3/8/8/8 w - - 0 1` → 2 (white side)
+	- Opponent symmetry: add black pawns e5,d5 → still 2 each side (validate perspective API)
+	- Edge case: promotions (no pawns) center empty → 0
+
+2. DCC (Distant Central Control)
+	- Knights c3,g3 controlling d5/e4 etc. Construct minimal position; count controlled outer ring squares (Plan.md §17 정의된 ring).
+	- Bishop f1 g2 fianchetto influencing long diagonal hitting distant ring squares.
+	- Edge: Pinned piece still counts (no suppression intended Phase 0).
+
+3. FCH (Fianchetto)
+	- Complete kingside fianchetto: pawns g2,g3; bishop g2 developed; no blocking pieces → 1.0 for that bishop.
+	- Partial (pawns moved, bishop still on f1) → progress fraction (spec: 0.5 if pawn structure ready but bishop undeveloped).
+	- Both sides (kingside & queenside) → average or sum per spec (Plan.md §17; we store side-specific then aggregate).
+	- Edge: Pawn captured (g-pawn missing) + bishop on g2 → 0 (structure invalid).
+
+4. PB_delay (Pawn Break Delay)
+	- Position with immediate available break (e.g., white pawn on c4 vs black d5 → potential cxd5) → delay=0 (uncensored).
+	- No break until move sequence forced (locked structure) → test censored flag when search horizon insufficient (simulate by API stub returning censor reason).
+	- Edge: Multiple candidate breaks; earliest counts.
+
+5. CL (Closedness)
+	- Fully open: Only kings and minor pieces no pawns → 0.
+	- Locked center: white pawns d4,e4 vs black d5,e5 both blocked by opposite pawns behind → high (approaches max scale before normalization).
+	- Semi-open: single lock (d-file locked, e-file open) → intermediate value.
+	- Edge: En passant square present does not affect locked evaluation.
+
+6. SI (Space Imbalance)
+	- Symmetric pawn chains mirrored → 0 (after sign, raw differential=0).
+	- White advanced pawns gaining space (e4,d4,c4) vs black still on 7th → positive.
+	- Inverted scenario for negative.
+	- Edge: Only kings left → 0.
+
+### 7.2 정규화 파이프라인 검증 (Normalization Validation)
+입력: Raw metrics 배열 (CO,DCC,FCH,PB_delay,CL,SI) 50개 샘플 (fixture JSON: `tests/fixtures/style_raw_samples_v1.json`).
+검증 단계:
+1. 로그 변환: PB_delay 값들 중 0 포함 시 log(1+x) 적용 후 monotonic 증가 확인.
+2. 중앙값/ IQR 계산: 수동 계산된 예제와 함수 결과 ±1e-9 이내.
+3. Robust scaling: (x - median)/(IQR) 결과에서 median→0, IQR→1 (IQR 적용 후 1이 되는지 tolerance 1e-6).
+4. 방향성 조정: 음수→'less hypermodern' 쪽 tail 여부 QA (샘플 3개 수동 라벨과 부호 일치).
+5. Clipping: [-3,3] 이외 값 없음 (edge case 인위적 outlier 주입 후 3에 clip).
+6. Sigmoid/MinMax (선택된 매핑) outputs in [0,1]; endpoints 테스트.
+7. Weighting 후 Style Score 재계산: Sum(weights)=1 assertion.
+
+### 7.3 Censoring (PB_delay) 테스트
+케이스:
+- Uncensored: break found within horizon → `censored=false`, `value=k`.
+- Censored (no break) → `censored=true`, `value=H+1`, `reason="horizon"`.
+- Forced disable (config flag) → treat as uncensored with sentinel? (Spec: still mark censored=false but `reason="disabled"` NOT used; we simply skip metric in aggregate weight renormalization.)
+가중합 처리: censored metric 제외 후 남은 weight 재정규화 테스트 (합=1).
+
+### 7.4 Golden JSON 회귀 (Golden File Regression)
+파일: `tests/golden/style_sample_v1.jsonl`
+구조: 라인별 JSON {fen, raw:{...}, norm:{...}, meta:{version, pb_delay:{censored,reason}}, style_score}
+정책:
+- Plan.md §17 metric_version 증가 시 새 파일 `style_sample_v{N}.jsonl` 추가, 구버전 보존.
+- 구현 변경이 의도된 경우: 새 기대값 생성 → PR에 diff 통계 (평균 절대 편차, max 편차) 첨부.
+- 비의도 변경 감지: CI에서 diff>tolerance (각 metric 1e-6, style_score 1e-6) 시 실패.
+생성 스크립트 (추가 예정): `scripts/gen_style_metrics.py --fixtures tests/fixtures/fens_small.txt --out tests/golden/style_sample_v1.jsonl`.
+
+### 7.5 Property 기반 스모크 (후속)
+랜덤 FEN 생성 → Invariants:
+- 0 ≤ FCH ≤ 1
+- CL ≥ 0
+- |SI| 합리적 상한 (예: 16)
+- Censored=false → PB_delay ≤ horizon
+위반 발생 시 실패 & FEN 로그.
+
+### 7.6 테스트 자산 (Artifacts)
+- `tests/fixtures/fens_small.txt` : 20 representative positions
+- `tests/fixtures/style_raw_samples_v1.json` : normalization fixture
+- `tests/golden/style_sample_v1.jsonl` : regression baseline
+- `scripts/gen_style_metrics.py` : 생성기
+
+### 7.7 커버리지 목표
+- Metrics 코드라인 ≥90% (gtest + fixture 기반)
+- Branch coverage: censoring 분기, clipping 분기 모두 실행
+
+테스트 패턴: 최소 1 포지션 = 1 assert set, 캡처된 기대값 JSON (golden) 보관.
 
 ---
 ## 8. 기능/통합 테스트 (Functional/Integration)
