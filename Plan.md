@@ -264,3 +264,74 @@ IQR=0 → scale=1 fallback. 결측 metric → 0.5 + warning. censored PB_delay �
 normalization_version (baseline 재산출 시 증가), weights_version (가중치 변경 시). JSON에 동기화.
 
 (End of Plan)
+
+---
+## 18. 빌드 환경 & 컴파일러 정책 (Build Environment & Compiler Policy)
+목표: 서버(리눅스) 및 로컬 개발 환경 재현성 확보, 성능/최적화 일관성 유지.
+
+### 18.1 표준 컴파일러
+- Primary Production: GCC 13 (Linux / WSL Ubuntu)
+- Optional Validation: Clang (최적화/경고 교차 검증), MSVC (Windows 디버깅 보조)
+- Deprecated / Unsupported: GCC < 11 (C++20 미충족), 구 MinGW GCC 6.x
+
+### 18.2 WSL 표준 설정 절차
+```
+sudo apt update
+sudo apt install -y software-properties-common
+sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+sudo apt update
+sudo apt install -y build-essential git python3-pip ninja-build pkg-config g++-13
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+python3 -m pip install --user meson
+```
+
+### 18.3 기본 빌드 흐름
+```
+~/.local/bin/meson setup builddir -Dnative_arch=true
+~/.local/bin/meson compile -C builddir
+~/.local/bin/meson test -C builddir StyleMetricsTest --print-errorlogs
+```
+Release 빌드:
+```
+~/.local/bin/meson configure builddir -Dbuildtype=release -Dnative_arch=true
+~/.local/bin/meson compile -C builddir
+```
+
+### 18.4 성능 / 재현성 정책
+- 개발 중 빠른 피드백: `-Dbuildtype=debugoptimized`.
+- 퍼포먼스 벤치/Elo: `release + native_arch=true`.
+- 재현 가능한 배포(아키텍처 중립): native_arch=false + 명시 `-march=x86-64-v3` (추가 옵션 TBD) → 별도 builddir.
+- LTO: Meson 기본 옵션 유지 (`b_lto=true`). 필요 시 profile-guided 최적화(PGO) Phase 3+ 고려.
+
+### 18.5 GPU / Backend 호환성 노트
+| Backend | 체크 항목 | 주석 |
+|---------|----------|------|
+| CUDA | Toolkit 버전 ↔ 허용 GCC 범위 | CUDA 12.x: GCC ≤13 권장. 버전 고정 시 문서화 |
+| OpenCL | ICD & 헤더 경로 | GCC/Clang 차 최소 |
+| SYCL (oneAPI) | DPC++(Clang) 사용 | 코어 엔진은 GCC로, SYCL만 별도 toolchain 가능 |
+| BLAS / oneDNN | 라이브러리 링크 호환 | -DUSE_BLAS 플래그 영향 성능 측정 |
+
+### 18.6 CI 매트릭스 (향후)
+- gcc13 Debug / Release
+- clang 최신 Release (경고/UB 체크)
+- 옵션: style_metrics normalization drift 체크 job
+
+### 18.7 문제 대응 가이드
+| 증상 | 원인 | 해결 |
+|------|------|------|
+| Meson setup 중 C++20 에러 | 구버전 GCC | g++-13 설치 후 update-alternatives |
+| Subproject (abseil) 실패 | 표준 플래그 미지원 | 컴파일러 교체 (gcc13/clang) |
+| Link OpenCL 실패 | 헤더/ICD 누락 | distro 패키지(opencl-headers, ocl-icd-libopencl1) 설치 |
+| CUDA 컴파일 오류 | GCC 버전 과다 신형 | CUDA release notes 확인, 하위 GCC 설치 |
+
+### 18.8 버전 고정 정책
+- 기록: `docs/build_env.json` (추후) → { gcc_version, cuda_version, normalization_version, weights_version }.
+- 변경 시 체인지로그(Changelog) & Plan.md §18 업데이트.
+
+### 18.9 향후 개선
+- ccache / sccache 통합
+- PGO 프로파일 자동 수집 (self-play run tag)
+- Sanitizer 빌드 (clang ASan/UBSan) 별도 파이프라인
+
+(End §18)
